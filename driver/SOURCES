@@ -1,0 +1,5 @@
+TARGETNAME=spooferdrv
+TARGETTYPE=DRIVER
+TARGETPATH=.\SYS
+
+SOURCES=spooferdrv.c
