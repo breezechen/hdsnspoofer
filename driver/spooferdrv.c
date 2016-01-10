@@ -200,7 +200,7 @@ VOID Update()
 
         for (; i < MAX_HD_COUNT; ++i)
         {
-            valueBuf[2] = '0' + i;
+            valueBuf[2] = '0' + (WCHAR)i;
             status = ZwQueryValueKey(hReg, &valueStr, KeyValuePartialInformation, NULL, 0, &ulSize);
             if (STATUS_OBJECT_NAME_NOT_FOUND == status || ulSize == 0) {
                 KdPrint(("[br]访问注册表键值[%ws]-> 询问大小 失败！\n", valueStr.Buffer));
@@ -219,7 +219,7 @@ VOID Update()
                 KdPrint(("[br]访问注册表键值[%ws]-> 格式错误！\n", valueStr.Buffer));
                 continue;
             }
-            wptr = pvpi->Data;
+            wptr = (PWCHAR)pvpi->Data;
             for (j = 0; j < 20; ++j)
             {
                 SNS[i].DiskSerial[j] = Hex(wptr[j*2]) * 0x10 + Hex(wptr[j*2 + 1]);
@@ -236,20 +236,6 @@ VOID Update()
     if (hReg) {
         ZwClose(hReg);
     }
-}
-
-PUCHAR IsSubString(PUCHAR String, PUCHAR SubString , ULONG StringLength , ULONG SubStringLength)
-{
-    ULONG i, j;
-    for(i = 0; i < StringLength - SubStringLength + 1 ; i++) {
-        for(j = 0; j < SubStringLength; j++) {
-            if(String[i + j] != SubString[j])
-                break;
-        }
-        if(j == SubStringLength) //match a substring
-            return String + i;
-    }
-    return NULL;
 }
 
 NTSTATUS HookedDiskDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
@@ -278,6 +264,7 @@ NTSTATUS HookedDiskDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         return RealDiskDeviceControl(DeviceObject, Irp);
     }
 
+    // 以下的代码都是来自于reactos/drivers/storage/class/disk.c
     do 
     {
         if (irpStack->Parameters.DeviceIoControl.InputBufferLength <
