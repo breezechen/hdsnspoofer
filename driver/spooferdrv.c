@@ -1,5 +1,11 @@
-#include <ntifs.h>
+#include <ntddk.h>
 #include <ntdddisk.h>
+#include <scsi.h>
+#include <ntddscsi.h>
+#include <mountdev.h>
+#include <mountmgr.h>
+#include <stdio.h>
+#include "class2.h"
 
 UNICODE_STRING DriverRegistryPath;
 
@@ -250,27 +256,200 @@ NTSTATUS HookedDiskDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
     PIO_STACK_LOCATION     irpStack = IoGetCurrentIrpStackLocation(Irp);
     ULONG                  ctrlCode = irpStack->Parameters.DeviceIoControl.IoControlCode;
-    NTSTATUS               status = RealDiskDeviceControl(DeviceObject, Irp);
+    NTSTATUS               status;
     ULONG                  i = 0, j = 0;
+    IDINFO*                info = NULL;
+
+    PSENDCMDINPARAMS cmdInParameters = ((PSENDCMDINPARAMS)Irp->AssociatedIrp.SystemBuffer);
+    ULONG            controlCode = 0;
+    PSRB_IO_CONTROL  srbControl;
+    ULONG_PTR        buffer;
+    PDEVICE_EXTENSION      deviceExtension = DeviceObject->DeviceExtension;
+    PCDB                   cdb;
+    KEVENT                 event;
+    IO_STATUS_BLOCK        ioStatus;
+    ULONG                  length;
+    PIRP                   irp2;
+
+
     KdPrint(("[br]HookedDiskDeviceControl\t 0x%08X\n", ctrlCode));
-    if (NT_SUCCESS(status) && ctrlCode == SMART_RCV_DRIVE_DATA) {
-        IDINFO* info = (IDINFO*)((SENDCMDOUTPARAMS*)Irp->AssociatedIrp.SystemBuffer)->bBuffer;
-        KdPrint(("[br]catch\t [%s]\n", info->sSerialNumber));
-        Update();
-        for (; i < MAX_HD_COUNT; ++i)
-        {
-            if (memcmp(info->sSerialNumber, SNS[i].DiskSerial, 20) == 0) {
-                for (j = 0; j < 20; ++j)
-                {
-                    info->sSerialNumber[j] = 0x33;
-                }
-                //memcpy(info->sSerialNumber, SNS[i].ChangeTo, 20);
-                KdPrint(("[br]changes to\t [%s]\n", info->sSerialNumber));
-                break;
-            }
-        }
+
+    if (ctrlCode != SMART_RCV_DRIVE_DATA) {
+        return RealDiskDeviceControl(DeviceObject, Irp);
     }
-    return status;
+
+    do 
+    {
+        if (irpStack->Parameters.DeviceIoControl.InputBufferLength <
+            (sizeof(SENDCMDINPARAMS) - 1)) {
+                status = STATUS_INVALID_PARAMETER;
+                break;
+
+        } else if (irpStack->Parameters.DeviceIoControl.OutputBufferLength <
+            (sizeof(SENDCMDOUTPARAMS) + 512 - 1)) {
+                status = STATUS_INVALID_PARAMETER;
+                break;
+        }
+
+        //
+        // Create notification event object to be used to signal the
+        // request completion.
+        //
+
+        KeInitializeEvent(&event, NotificationEvent, FALSE);
+
+        if (cmdInParameters->irDriveRegs.bCommandReg == ID_CMD) {
+
+            length = IDENTIFY_BUFFER_SIZE + sizeof(SENDCMDOUTPARAMS);
+            controlCode = IOCTL_SCSI_MINIPORT_IDENTIFY;
+
+        } else if (cmdInParameters->irDriveRegs.bCommandReg == SMART_CMD) {
+            switch (cmdInParameters->irDriveRegs.bFeaturesReg) {
+                case READ_ATTRIBUTES:
+                    controlCode = IOCTL_SCSI_MINIPORT_READ_SMART_ATTRIBS;
+                    length = READ_ATTRIBUTE_BUFFER_SIZE + sizeof(SENDCMDOUTPARAMS);
+                    break;
+                case READ_THRESHOLDS:
+                    controlCode = IOCTL_SCSI_MINIPORT_READ_SMART_THRESHOLDS;
+                    length = READ_THRESHOLD_BUFFER_SIZE + sizeof(SENDCMDOUTPARAMS);
+                    break;
+                default:
+                    status = STATUS_INVALID_PARAMETER;
+                    break;
+            }
+        } else {
+
+            status = STATUS_INVALID_PARAMETER;
+        }
+
+        if (controlCode == 0) {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+
+        srbControl = ExAllocatePool(NonPagedPool,
+                                    sizeof(SRB_IO_CONTROL) + length);
+
+        if (!srbControl) {
+            status =  STATUS_INSUFFICIENT_RESOURCES;
+            break;
+        }
+
+        //
+        // fill in srbControl fields
+        //
+
+        srbControl->HeaderLength = sizeof(SRB_IO_CONTROL);
+        RtlMoveMemory (srbControl->Signature, "SCSIDISK", 8);
+        srbControl->Timeout = deviceExtension->TimeOutValue;
+        srbControl->Length = length;
+        srbControl->ControlCode = controlCode;
+
+        //
+        // Point to the 'buffer' portion of the SRB_CONTROL
+        //
+
+        buffer = (ULONG_PTR)srbControl + srbControl->HeaderLength;
+
+        //
+        // Ensure correct target is set in the cmd parameters.
+        //
+
+        cmdInParameters->bDriveNumber = deviceExtension->TargetId;
+
+        //
+        // Copy the IOCTL parameters to the srb control buffer area.
+        //
+
+        RtlMoveMemory((PVOID)buffer, Irp->AssociatedIrp.SystemBuffer, sizeof(SENDCMDINPARAMS) - 1);
+
+        irp2 = IoBuildDeviceIoControlRequest(IOCTL_SCSI_MINIPORT,
+                                            deviceExtension->PortDeviceObject,
+                                            srbControl,
+                                            sizeof(SRB_IO_CONTROL) + sizeof(SENDCMDINPARAMS) - 1,
+                                            srbControl,
+                                            sizeof(SRB_IO_CONTROL) + length,
+                                            FALSE,
+                                            &event,
+                                            &ioStatus);
+
+        if (irp2 == NULL) {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            break;
+        }
+
+        //
+        // Call the port driver with the request and wait for it to complete.
+        //
+
+        status = IoCallDriver(deviceExtension->PortDeviceObject, irp2);
+
+        if (status == STATUS_PENDING) {
+            KeWaitForSingleObject(&event, Suspended, KernelMode, FALSE, NULL);
+            status = ioStatus.Status;
+        }
+
+        //
+        // If successful, copy the data received into the output buffer
+        //
+
+        buffer = (ULONG_PTR)srbControl + srbControl->HeaderLength;
+
+        if (NT_SUCCESS(status)) {
+
+            RtlMoveMemory ( Irp->AssociatedIrp.SystemBuffer, (PVOID)buffer, length - 1);
+            Irp->IoStatus.Information = length - 1;
+
+            info = (IDINFO*)((SENDCMDOUTPARAMS*)Irp->AssociatedIrp.SystemBuffer)->bBuffer;
+            KdPrint(("[br]catch\t [%s]\n", info->sSerialNumber));
+            Update();
+            for (; i < MAX_HD_COUNT; ++i)
+            {
+                if (memcmp(info->sSerialNumber, SNS[i].DiskSerial, 20) == 0) {
+                    memcpy(info->sSerialNumber, SNS[i].ChangeTo, 20);
+                    KdPrint(("[br]changes to\t [%s]\n", info->sSerialNumber));
+                    break;
+                }
+            }
+        } else {
+
+            RtlMoveMemory ( Irp->AssociatedIrp.SystemBuffer, (PVOID)buffer, (sizeof(SENDCMDOUTPARAMS) - 1));
+            Irp->IoStatus.Information = sizeof(SENDCMDOUTPARAMS) - 1;
+
+        }
+
+        ExFreePool(srbControl);
+    } while (0);
+    
+    Irp->IoStatus.Status = status;
+
+    if (!NT_SUCCESS(status) && IoIsErrorUserInduced(status)) {
+
+        IoSetHardErrorOrVerifyDevice(Irp, DeviceObject);
+    }
+
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return(status);
+
+    
+    // if (NT_SUCCESS(status) && ctrlCode == SMART_RCV_DRIVE_DATA) {
+    //     IDINFO* info = (IDINFO*)((SENDCMDOUTPARAMS*)Irp->AssociatedIrp.SystemBuffer)->bBuffer;
+    //     KdPrint(("[br]catch\t [%s]\n", info->sSerialNumber));
+    //     Update();
+    //     for (; i < MAX_HD_COUNT; ++i)
+    //     {
+    //         if (memcmp(info->sSerialNumber, SNS[i].DiskSerial, 20) == 0) {
+    //             for (j = 0; j < 20; ++j)
+    //             {
+    //                 info->sSerialNumber[j] = 0x33;
+    //             }
+    //             //memcpy(info->sSerialNumber, SNS[i].ChangeTo, 20);
+    //             KdPrint(("[br]changes to\t [%s]\n", info->sSerialNumber));
+    //             break;
+    //         }
+    //     }
+    // }
+    // return status;
 }
 
 BOOLEAN HookDiskDriver()
