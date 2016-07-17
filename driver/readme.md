@@ -34,7 +34,7 @@
     wmic diskdrive get serialnumber
     ```
 
-2. 在注册表`HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\services\spooferdrv`新建键值
+2. 在注册表`HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\services\spooferdrv`下，修改键值
 
     ```
     "sn0"="32535631534E4741323232393833204220202020|32535632534E4742333242323833344230303337"
@@ -42,6 +42,6 @@
                         ┖┈┈>这个是原始序列号               ┖┈┈>这个是修改后的序列号
     "sn1"="2020202020202020202020205635464D5231574A|3320202020302033323732305636464D52335737"
     
-    # 有两个硬盘就建两个键值`sn0` `sn1`，编号从0开始
+    # 有两个硬盘就建两个键值`sn0` `sn1`，编号从0开始, 最多支持10块硬盘，编号0-9
     ```
     修改注册表后，无需重启系统，立即生效
