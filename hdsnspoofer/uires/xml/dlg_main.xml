@@ -1,0 +1,58 @@
+﻿<SOUI name="mainWindow" title="@string/title" bigIcon="ICON_LOGO:32" smallIcon="ICON_LOGO:16" width="280" height="200"  margin="20,5,5,5"  resizable="0" wndType="appMain"
+appWnd="1"
+translucent="1" 
+>
+  <style>
+    <class name="cls_border" ncSkin="_skin.edit.bkg" margin-x="4" margin-y="2" />
+  </style>
+  <root skin="_skin.shadow">
+    <window pos="5,3,-5,-7" font="face:微软雅黑,adding:-3" colorBkgnd="@color/white" colorText="@color/blue">
+      <window pos="0,0,120,-0" colorBkgnd="@color/blue">
+        <imgbtn skin="_skin.btn.bkg" name="btn_mode" pos="20,-116" size="84,32" cursor="hand">高级模式</imgbtn>        
+        <imgbtn skin="_skin.btn.bkg" name="btn_install" pos="20,-58" size="84,32" cursor="hand">安装</imgbtn>
+      </window>
+      <window pos="120,0,121,-0" colorBkgnd="@color/blue"/>
+      <window pos="121,0,-0,-0" name="wnd_rapid" visible="1">
+        <imgbtn skin="_skin.btn.bkg" pos="|-42,|-16" name="btn_spoof" size="84,32" cursor="hand">快速修改</imgbtn>
+      </window>
+      <window pos="121,0,-0,-0" name="wnd_adv" visible="0">
+        <window pos="0, 42" size="319,52" visible="1" name="hd0">
+          <text name="hd0_raw" pos="62,12" size="242,10" colorText="@color/gray">12345678901234567890123456789012</text>
+          <text pos="{-48,[6" size="40,24" >修改为</text>
+          <edit name="hd0_new" class="cls_border" pos="[4,{0" size="232,24" maxBuf="32" cueText="硬盘0"></edit>
+        </window>
+        <window pos="0, [0" size="319,52" visible="0" name="hd1">
+          <text name="hd1_raw" pos="62,12" size="242,10" colorText="@color/gray">12345678901234567890123456789012</text>
+          <text pos="{-48,[6" size="40,24" >修改为</text>
+          <edit name="hd1_new" class="cls_border" pos="[4,{0" size="232,24" maxBuf="32" cueText="硬盘1"></edit>
+        </window>
+        <window pos="0, [0" size="319,52" visible="0" name="hd2">
+          <text name="hd2_raw" pos="62,12" size="242,10" colorText="@color/gray">12345678901234567890123456789012</text>
+          <text pos="{-48,[6" size="40,24" >修改为</text>
+          <edit name="hd2_new" class="cls_border" pos="[4,{0" size="232,24" maxBuf="32" cueText="硬盘2"></edit>
+        </window>
+        <window pos="0, [0" size="319,52" visible="0" name="hd3">
+          <text name="hd3_raw" pos="62,12" size="242,10" colorText="@color/gray">12345678901234567890123456789012</text>
+          <text pos="{-48,[6" size="40,24" >修改为</text>
+          <edit name="hd3_new" class="cls_border" pos="[4,{0" size="232,24" maxBuf="32" cueText="硬盘3"></edit>
+        </window>
+        <window pos="0, [0" size="319,52" visible="0" name="hd4">
+          <text name="hd4_raw" pos="62,12" size="242,10" colorText="@color/gray">12345678901234567890123456789012</text>
+          <text pos="{-48,[6" size="40,24" >修改为</text>
+          <edit name="hd4_new" class="cls_border" pos="[4,{0" size="232,24" maxBuf="32" cueText="硬盘4"></edit>
+        </window>
+        <window pos="0, [0" size="319,52" visible="0" name="hd5">
+          <text name="hd5_raw" pos="62,12" size="242,10" colorText="@color/gray">12345678901234567890123456789012</text>
+          <text pos="{-48,[6" size="40,24" >修改为</text>
+          <edit name="hd5_new" class="cls_border" pos="[4,{0" size="232,24" maxBuf="32" cueText="硬盘5"></edit>
+        </window>
+        <imgbtn skin="_skin.btn.bkg" name="btn_apply" pos="|-32,-36" size="64,26" cursor="hand">修改</imgbtn>
+      </window>
+      <caption pos="0,0,-0,38" show="1" colorText="@color/white">
+        <text pos="18,14" >硬盘序列号修改器</text>
+        <text pos="124,14" colorText="@color/blue">-- By Breeze.</text>
+        <imgbtn name="btn_close" skin="_skin.btn.close" pos="-35,0" tip="close" animate="1"/>
+      </caption>
+    </window>
+  </root>
+</SOUI>

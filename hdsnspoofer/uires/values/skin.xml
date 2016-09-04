@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<skin>
+  	<imglist name="skin_traymenu_icons"	src="img:traymenu_icons" states="9"/>
+    <imglist name="_skin.btn.close" src="PNG:ID_SYS_BTN_CLOSE" states="3" />
+    <imgframe name="_skin.shadow" src="PNG:ID_PNG_SHADOW" left="5" top="3" right="5" bottom="7"/>
+    <imgframe name="_skin.edit.bkg" src="PNG:ID_PNG_EDIT_BKG" left="1" top="1" right="1" bottom="1"/>
+    <imgframe name="_skin.btn.bkg" src="PNG:ID_PNG_BTN_BKG" left="1" top="1" right="1" bottom="1" states="3"/>
+</skin>
