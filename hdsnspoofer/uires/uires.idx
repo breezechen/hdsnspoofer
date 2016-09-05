@@ -23,4 +23,8 @@
   <ICON>
     <file name="ICON_LOGO"  path="image\soui.ico"/>
   </ICON>
+  <BIN>
+    <file name="ID_BIN_32SYS" path="res\32.sys" />
+    <file name="ID_BIN_64SYS" path="res\64.sys" />
+  </BIN>
 </resource>
