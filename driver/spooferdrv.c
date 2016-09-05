@@ -21,8 +21,12 @@ typedef struct _SerialNumbers
     UCHAR ChangeTo  [SN_LEN];
 }SerialNumbers, *PSerialNumbers;
 
+typedef struct _SNInfo
+{
+    ULONG Count;
+    SerialNumbers SNS[MAX_HD_COUNT];
+}SNInfo, *PSNInfo;
 
-SerialNumbers SNS[MAX_HD_COUNT] = {0};
 
 extern NTKERNELAPI 
     NTSTATUS
@@ -169,7 +173,7 @@ char Hex(WCHAR wch)
     return 0;
 }
 
-VOID Update()
+BOOLEAN GetSNInfo(SNInfo* info)
 {
     OBJECT_ATTRIBUTES attr;
     ULONG result;
@@ -180,14 +184,13 @@ VOID Update()
     UNICODE_STRING valueStr;
     WCHAR valueBuf[4];
     ULONG ulSize;
-    PWCHAR wptr;
-    RtlZeroMemory(SNS, sizeof(SerialNumbers) * MAX_HD_COUNT);
+    PWCHAR wptr;   
 
     InitializeObjectAttributes(&attr, &DriverRegistryPath, OBJ_CASE_INSENSITIVE, NULL, NULL);
     status = ZwOpenKey(&hReg, KEY_QUERY_VALUE, &attr);
     if (!NT_SUCCESS(status)) {
         KdPrint(("[br]打开注册表[%ws]失败\n", DriverRegistryPath.Buffer));
-        return ;
+        return FALSE;
     }
 
     do 
@@ -198,44 +201,45 @@ VOID Update()
         valueBuf[3] = '\0';
         RtlInitUnicodeString(&valueStr, valueBuf);
 
-        for (; i < MAX_HD_COUNT; ++i)
+        for (i = 0; i < MAX_HD_COUNT; ++i)
         {
             valueBuf[2] = '0' + (WCHAR)i;
             status = ZwQueryValueKey(hReg, &valueStr, KeyValuePartialInformation, NULL, 0, &ulSize);
             if (STATUS_OBJECT_NAME_NOT_FOUND == status || ulSize == 0) {
                 KdPrint(("[br]访问注册表键值[%ws]-> 询问大小 失败！\n", valueStr.Buffer));
-                continue;
+                break;
             }
             pvpi = (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePool(NonPagedPool, ulSize);
             status = ZwQueryValueKey(hReg, &valueStr, KeyValuePartialInformation, pvpi, ulSize, &result);
             if (!NT_SUCCESS(status)) {
                 ExFreePool(pvpi);
                 KdPrint(("[br]访问注册表键值[%ws]-> 查询键值 失败！\n", valueStr.Buffer));
-                continue;
+                break;
             }
             KdPrint(("[br]%d, %ws\n", pvpi->DataLength, pvpi->Data));
             if (pvpi->DataLength != 164) {
                 ExFreePool(pvpi);
                 KdPrint(("[br]访问注册表键值[%ws]-> 格式错误！\n", valueStr.Buffer));
-                continue;
+                break;
             }
             wptr = (PWCHAR)pvpi->Data;
             for (j = 0; j < 20; ++j)
             {
-                SNS[i].DiskSerial[j] = Hex(wptr[j*2]) * 0x10 + Hex(wptr[j*2 + 1]);
-                SNS[i].ChangeTo[j] = Hex(wptr[(20*2+1) + j*2]) * 0x10 + Hex(wptr[(20*2+1) + j*2 + 1]);
+                info->SNS[i].DiskSerial[j] = Hex(wptr[j*2]) * 0x10 + Hex(wptr[j*2 + 1]);
+                info->SNS[i].ChangeTo[j] = Hex(wptr[(20*2+1) + j*2]) * 0x10 + Hex(wptr[(20*2+1) + j*2 + 1]);
             }
-            KdPrint(("[br]%s\n", SNS[i].DiskSerial));
-            KdPrint(("[br]%s\n", SNS[i].ChangeTo));
+            KdPrint(("[br]%s\n", info->SNS[i].DiskSerial));
+            KdPrint(("[br]%s\n", info->SNS[i].ChangeTo));
             ExFreePool(pvpi);
         }
-
+        info->Count = i;
 
     } while(0);
 
     if (hReg) {
         ZwClose(hReg);
     }
+    return TRUE;
 }
 
 NTSTATUS HookedDiskDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
@@ -256,7 +260,7 @@ NTSTATUS HookedDiskDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     IO_STATUS_BLOCK        ioStatus;
     ULONG                  length;
     PIRP                   irp2;
-
+    SNInfo                 snInfo;
 
     KdPrint(("[br]HookedDiskDeviceControl\t 0x%08X\n", ctrlCode));
 
@@ -389,11 +393,12 @@ NTSTATUS HookedDiskDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
             info = (IDINFO*)((SENDCMDOUTPARAMS*)Irp->AssociatedIrp.SystemBuffer)->bBuffer;
             KdPrint(("[br]catch\t [%s]\n", info->sSerialNumber));
-            Update();
-            for (; i < MAX_HD_COUNT; ++i)
+            snInfo.Count = 0;
+            GetSNInfo(&snInfo);
+            for (i = 0; i < snInfo.Count; ++i)
             {
-                if (memcmp(info->sSerialNumber, SNS[i].DiskSerial, 20) == 0) {
-                    memcpy(info->sSerialNumber, SNS[i].ChangeTo, 20);
+                if (memcmp(info->sSerialNumber, snInfo.SNS[i].DiskSerial, 20) == 0) {
+                    memcpy(info->sSerialNumber, snInfo.SNS[i].ChangeTo, 20);
                     KdPrint(("[br]changes to\t [%s]\n", info->sSerialNumber));
                     break;
                 }
@@ -517,8 +522,6 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRING Registry
                    RegistryPath->Length);
         KdPrint(("[br]DriverRegistryPath:%ws\n", DriverRegistryPath.Buffer));
     }
-
-    Update();
 
     if (HookDiskDriver()) {
         for(i = 0; i < IRP_MJ_MAXIMUM_FUNCTION; i++)
