@@ -46,6 +46,14 @@ extern POBJECT_TYPE *IoDriverObjectType;
 #define SMART_RCV_DRIVE_DATA \
   CTL_CODE(IOCTL_DISK_BASE, 0x0022, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
 
+#define  DFP_SEND_DRIVE_COMMAND   \
+  CTL_CODE(IOCTL_DISK_BASE, 0x0021, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+#define  DFP_RECEIVE_DRIVE_DATA   \
+  CTL_CODE(IOCTL_DISK_BASE, 0x0022, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+
+#define  IDE_ATA_IDENTIFY           0xEC
 
 typedef struct _IDINFO
 {
@@ -171,6 +179,30 @@ char Hex(WCHAR wch)
         return wch - 'a' + 0xa;
     }
     return 0;
+}
+
+VOID ToHexStr(UCHAR* bytes, ULONG len, WCHAR* buf)
+{
+    ULONG i = 0;
+    UCHAR m, n;
+    for (i = 0; i < len; ++i) {
+        m = bytes[i] / 0x10;
+        n = bytes[i] % 0x10;
+        buf[i * 2] = m > 9 ? ('A' + m - 0xa) : ('0' + m);
+        buf[i * 2 + 1] = n > 9 ? ('A' + n - 0xa) : ('0' + n);
+    }
+}
+
+ULONG GetIndex(SNInfo* sns, UCHAR* sn)
+{
+    ULONG i;
+    for (i = 0; i < sns->Count; ++i)
+    {
+        if (memcmp(sns->SNS[i].DiskSerial, sn, SN_LEN) == 0) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 BOOLEAN GetSNInfo(SNInfo* info)
@@ -477,6 +509,165 @@ BOOLEAN HookDiskDriver()
     return ret;
 }
 
+BOOLEAN GetDiskSN(PDEVICE_OBJECT deviceObject, UCHAR* sn)
+{
+    NTSTATUS                status;
+    PSENDCMDINPARAMS        pSCIP;
+    PSENDCMDOUTPARAMS       pSCOP;
+    PIRP                    Irp;
+    IO_STATUS_BLOCK         ioStatus;
+    KEVENT                  event;
+    BOOLEAN                 ret = FALSE;
+
+    pSCIP = (PSENDCMDINPARAMS) ExAllocatePool(NonPagedPool, sizeof(SENDCMDINPARAMS) - 1);
+    pSCOP = (PSENDCMDOUTPARAMS) ExAllocatePool(NonPagedPool, sizeof(SENDCMDOUTPARAMS) + sizeof(IDINFO) - 1);
+
+    if (pSCIP && pSCOP)
+    {
+        KeInitializeEvent(&event, NotificationEvent, FALSE);
+        RtlZeroMemory(pSCIP, sizeof(SENDCMDINPARAMS) - 1);
+        RtlZeroMemory(pSCOP, sizeof(SENDCMDOUTPARAMS) + sizeof(IDINFO) - 1);
+
+        pSCIP->irDriveRegs.bCommandReg = IDE_ATA_IDENTIFY;
+        pSCIP->cBufferSize = 0;
+        pSCOP->cBufferSize = sizeof(IDINFO);
+
+        if (Irp = IoBuildDeviceIoControlRequest(DFP_RECEIVE_DRIVE_DATA/*IRP_MJ_DEVICE_CONTROL*/, deviceObject, pSCIP, sizeof(SENDCMDINPARAMS) - 1, 
+            pSCOP, sizeof(SENDCMDOUTPARAMS) + sizeof(IDINFO) - 1, FALSE, &event, &ioStatus)) {
+            status = IoCallDriver(deviceObject, Irp);
+            if(status == STATUS_PENDING) {
+                KeWaitForSingleObject(&event, Suspended, KernelMode, FALSE, NULL);
+                status = ioStatus.Status;
+            }
+            if (NT_SUCCESS(status)) {
+                PIDINFO pinfo = (PIDINFO) pSCOP->bBuffer;
+                memcpy(sn, pinfo->sSerialNumber, sizeof(pinfo->sSerialNumber));
+                ret = TRUE;
+            } else {
+                KdPrint(("[br] in [%s] IoCallDriver Failed: 0x%08X\n", __FUNCTION__, status));
+            }
+        }
+    }
+    if (pSCOP)
+        ExFreePool(pSCOP);
+    if (pSCIP)
+        ExFreePool(pSCIP);
+
+    return ret;
+}
+
+
+BOOLEAN SetOriginSNInfo()
+{
+    BOOLEAN ret = FALSE;
+    NTSTATUS status;
+    UNICODE_STRING driverName;
+    PDEVICE_OBJECT deviceObject;
+    PDRIVER_OBJECT driverObject;
+    SNInfo sns;
+    ULONG index = 0;
+    OBJECT_ATTRIBUTES attr;
+    ULONG result;
+    HANDLE hReg = NULL;
+    PKEY_VALUE_PARTIAL_INFORMATION pvpi = NULL;
+    UNICODE_STRING valueStr;
+    WCHAR valueBuf[4];
+    WCHAR tmpBuf[82];
+    ULONG ulSize;
+    PWCHAR wptr; 
+    ULONG i = 0, j = 0;
+    SNInfo oldInfo;
+    BOOLEAN found = FALSE;
+
+
+    sns.Count = 0;
+    oldInfo.Count = 0;
+    RtlInitUnicodeString(&driverName, L"\\driver\\disk");
+
+    do
+    {
+        status = ObReferenceObjectByName( 
+        &driverName, 
+        OBJ_CASE_INSENSITIVE, 
+        NULL, 
+        0, 
+        *IoDriverObjectType, 
+        KernelMode,
+        NULL, 
+        (PVOID *)&driverObject); 
+        if (driverObject == NULL) {
+            KdPrint(("[br] in [%s] ObReferenceObjectByNameÊ§°Ü\n", __FUNCTION__));
+            break;
+        }
+
+        deviceObject = driverObject->DeviceObject;
+        while (deviceObject) {
+            if (GetDiskSN(deviceObject, sns.SNS[index].DiskSerial)) {
+                if (GetIndex(&sns, sns.SNS[index].DiskSerial) == -1) {
+                    index++;
+                    sns.Count = index;
+                } 
+            }
+            deviceObject = deviceObject->NextDevice;
+        }
+
+        ObDereferenceObject(driverObject);
+
+        GetSNInfo(&oldInfo);
+
+        for (i = 0; i < index; ++i)
+        {
+            found = FALSE;
+            for (j = 0; j < oldInfo.Count; ++j)
+            {
+                if (memcmp(oldInfo.SNS[j].DiskSerial, sns.SNS[i].DiskSerial, 20) == 0) {
+                    memcpy(sns.SNS[i].ChangeTo, oldInfo.SNS[j].ChangeTo, 20);
+                    found = TRUE;
+                    break;
+                }
+            }
+            if (!found) {
+                memcpy(sns.SNS[i].ChangeTo, sns.SNS[i].DiskSerial, 20);
+            }
+        }
+
+        InitializeObjectAttributes(&attr, &DriverRegistryPath, OBJ_CASE_INSENSITIVE, NULL, NULL);
+        status = ZwOpenKey(&hReg, KEY_WRITE, &attr);
+        if (!NT_SUCCESS(status)) {
+            KdPrint(("[br]ÒÔÐ´È¨ÏÞ´ò¿ª×¢²á±í[%ws]Ê§°Ü\n", DriverRegistryPath.Buffer));
+            break;
+        }
+
+        valueBuf[0] = 's';
+        valueBuf[1] = 'n';
+        valueBuf[2] = '0';
+        valueBuf[3] = '\0';
+        RtlInitUnicodeString(&valueStr, valueBuf);
+
+        for (i = 0; i < index; ++i)
+        {
+            wptr = tmpBuf;
+            ToHexStr(sns.SNS[i].DiskSerial, SN_LEN, wptr);
+            wptr += (SN_LEN*2);
+            *wptr++ = '|';
+            ToHexStr(sns.SNS[i].ChangeTo, SN_LEN, wptr);
+            wptr += (SN_LEN*2);
+            *wptr = 0;
+
+            valueBuf[2] = '0' + (WCHAR)i;
+            status = ZwSetValueKey(hReg, &valueStr, 0, REG_SZ, tmpBuf, (SN_LEN * 4  + 2)*sizeof(WCHAR));
+            if (!NT_SUCCESS(status)) {
+                KdPrint(("[br]Ð´×¢²á±í[%ws]Ê§°Ü\n", valueStr.Buffer));
+                continue;
+            }
+        }
+        ZwClose(hReg);
+        ret = TRUE;
+    } while (0);
+
+    return ret;
+}
+
 VOID UnhookDiskDriver()
 {
     InterlockedExchangePointer((volatile PVOID *)&DiskDriver->MajorFunction[IRP_MJ_DEVICE_CONTROL], RealDiskDeviceControl);
@@ -505,7 +696,7 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRING Registry
     NTSTATUS status = STATUS_UNSUCCESSFUL;
     ULONG i = 0;
 #if DBG
-    //DbgBreakPoint();
+    DbgBreakPoint();
 #endif
     KdPrint(("[br]Driver Loaded\n"));
 
@@ -522,6 +713,8 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRING Registry
                    RegistryPath->Length);
         KdPrint(("[br]DriverRegistryPath:%ws\n", DriverRegistryPath.Buffer));
     }
+
+    SetOriginSNInfo();
 
     if (HookDiskDriver()) {
         for(i = 0; i < IRP_MJ_MAXIMUM_FUNCTION; i++)
