@@ -45,3 +45,8 @@
     # 有两个硬盘就建两个键值`sn0` `sn1`，编号从0开始, 最多支持10块硬盘，编号0-9
     ```
     修改注册表后，无需重启系统，立即生效
+    
+# 校验修改是否成功
+```
+wmic path win32_physicalmedia get SerialNumber
+```
